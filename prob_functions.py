@@ -13,7 +13,7 @@ def prob_analysis(data: InputData):
         data.hydra_data_hf,
         mu,
         beta,
-        f"output/{data.dijkvak}.gumbel_fit.png",
+        f"output/{data.dijktraject}_{data.dijkvak}.gumbel_fit.png",
     )
 
     # Maak FC curve en bepaal totale faalkans
@@ -55,7 +55,7 @@ def prob_analysis(data: InputData):
         faalkans,
         f_piping,
         betab,
-        f"output/{data.dijkvak}.fc.png",
+        f"output/{data.dijktraject}_{data.dijkvak}.fc.png",
     )
 
     print(f"Faalkans = {f_piping_gumbel:.2e}")

@@ -1,21 +1,16 @@
 # Import packages
 
-import matplotlib.pyplot as plt
+
 import pandas as pd
 from pathlib import Path
 
 
-from scipy.stats import norm
-from scipy import integrate
-from scipy.stats import lognorm
-from scipy.stats import gumbel_r
-from scipy.stats import linregress
-
 from objects import InputData
 from prob_functions import prob_analysis
 
-
+# fill in the right dijktaject
 DIJKTRAJECT = "34-1"
+# generate the input file names
 GEGEVENS_XLSX = f"data/{DIJKTRAJECT}/{DIJKTRAJECT}_LBO-1.xlsx"
 HYDRA_XLSX = f"data/{DIJKTRAJECT}/{DIJKTRAJECT}_Hydra.xlsx"
 
@@ -60,6 +55,7 @@ for col in df_gegevens.columns:
         continue
 
     data = InputData(
+        dijktraject=DIJKTRAJECT,
         dijkvak=col,
         d_exit_m=parameters["effectieve deklaagdikte"],
         L_u_m=parameters["kwelweglengte"],
@@ -72,4 +68,3 @@ for col in df_gegevens.columns:
         hydra_data_f=hydra_data_f,
     )
     prob_analysis(data)
-    break

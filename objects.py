@@ -5,6 +5,7 @@ import numpy as np
 class InputData(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    dijktraject: str  # naam / code dijktraject
     dijkvak: str  # naam dijkvak
     d_exit_m: float  # Effectieve deklaagdikte
     L_u_m: float  # Kwelweglengte
