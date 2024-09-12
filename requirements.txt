@@ -1,0 +1,6 @@
+xgboost
+matplotlib
+scipy
+pandas
+openpyxl
+pydantic
