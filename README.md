@@ -2,6 +2,10 @@
 
 This repository contains code for the probabilistic piping check for waterboard WSBD
 
+## Status
+
+These scripts are work in progress and not production ready yet!
+
 ## Setup
 
 * Create a virtual environment using ```python -m venv .venv```
