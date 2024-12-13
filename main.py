@@ -8,8 +8,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import glob
-import scipy.stats as stats
 from matplotlib.ticker import StrMethodFormatter
+from openpyxl import Workbook
+from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.drawing.image import Image
 
 from prob_functions import prob_analysis
 
@@ -166,6 +168,10 @@ class Dijkvak(BaseModel):
     fc_slootopzetten: DijkvakResultaat = DijkvakResultaat()
     fc_bermen: DijkvakResultaat = DijkvakResultaat()
 
+    # Excel sheet voor uitvoer (komt van Dijktraject eigenschap)
+    workbook: Workbook
+    sheet: Worksheet
+
     @property
     def polderpeil(self) -> Optional[float]:
         # We gaan er vanuit dat over de scenarios in een dijkvak het polderpeil gelijk is!
@@ -191,6 +197,9 @@ class Dijkvak(BaseModel):
         self.log_waterstanden()
         self.log_scenarios()
 
+        # ws = self.workbook.active
+        # ws.title = f"{self.name}"
+
     def log_waterstanden(self):
         logging.info("-------------------------")
         logging.info("| waterstand |   kans   |")
@@ -200,6 +209,13 @@ class Dijkvak(BaseModel):
                 f"|{self.waterstanden.hoogtes[i]:11.2f} |{self.waterstanden.kansen[i]:9.5f} |"
             )
         logging.info("-------------------------")
+
+        # sheet = self.workbook[self.name]
+        self.sheet.append(["waterstand", "kans"])
+        for i in range(self.waterstanden.hoogtes.shape[0]):
+            self.sheet.append(
+                [self.waterstanden.hoogtes[i], self.waterstanden.kansen[i]]
+            )
 
     def log_scenarios(self) -> None:
         for i, scenario in enumerate(self.scenarios):
@@ -510,9 +526,7 @@ class Dijkvak(BaseModel):
         ax.legend()
 
     def generate_total_plot(self) -> None:
-        fig, axs = plt.subplots(
-            ncols=2, nrows=2, figsize=(16, 12), layout="constrained"
-        )
+        fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(12, 8), layout="constrained")
 
         self.plot_waterstanden(axs[0, 0])
         self.plot_normal_fc(axs[0, 1])
@@ -520,10 +534,16 @@ class Dijkvak(BaseModel):
         self.plot_slootpeil_opzetten(axs[1, 1])
 
         fig.suptitle(
-            f"Probabilistisch piping analyse - {DIJKTRAJECT} dijkvak {str(dijkvak.name).upper()}"
+            f"Probabilistisch piping analyse - {DIJKTRAJECT} dijkvak {str(self.name).upper()}"
         )
 
-        fig.savefig(Path(OUTPUT_PATH) / f"{DIJKTRAJECT}_{dijkvak.name}.fc.totaal.png")
+        fig_path = Path(OUTPUT_PATH) / f"{DIJKTRAJECT}_{self.name}.fc.totaal.png"
+        fig.savefig(fig_path)
+
+        img = Image(fig_path)
+        img.anchor = "D2"
+        self.sheet.add_image(img)
+
         plt.close()
 
     def calculate_countermeasures(self, waterstanden: List[float]) -> None:
@@ -568,12 +588,15 @@ class Dijkvak(BaseModel):
             )
 
         df.set_index("waterstanden", inplace=True)
-        df.to_excel(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.xlsx")
+        # df.to_excel(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.xlsx")
         df.to_csv(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.csv")
 
 
 class Dijktraject(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     dijkvakken: List[Dijkvak] = []
+    workbook: Workbook = Workbook()
 
     @classmethod
     def from_excel(
@@ -604,8 +627,11 @@ class Dijktraject(BaseModel):
                     hoogtes=df_hydra[naam_dijkvak].to_numpy()[1:].astype(float),
                     kansen=df_hydra.iloc[:, 0].to_numpy()[1:].astype(float),
                 )
+                result.workbook.create_sheet(title=naam_dijkvak, index=None)
                 result.dijkvakken.append(
                     Dijkvak(
+                        workbook=result.workbook,
+                        sheet=result.workbook[naam_dijkvak],
                         name=naam_dijkvak,
                         waterstanden=waterstanden,
                         hoogte_voorland=df_gegevens[col]["voorland maaiveld"],
@@ -634,6 +660,65 @@ class Dijktraject(BaseModel):
     def has_dijkvak_name(self, name: str) -> bool:
         return name in [dv.name for dv in self.dijkvakken]
 
+    def generate_maatregelen(self):
+        for dijkvak in tqdm(dijktraject.dijkvakken[:1]):
+            dijkvak.log()
+
+            # standaard FC
+            try:
+                dijkvak.generate_fc()
+            except Exception as e:
+                logging.error(f"Fout bij het bepalen van de FC, '{e}'")
+
+            # FC bij maatregel slootpeil opzetten
+            if np.isnan(dijkvak.hoogte_maaiveld_polder):
+                logging.warning(
+                    "Kan het slootpeil voor dit scenario niet opzetten omdat de hoogte van het maaiveld niet gedefinieerd is"
+                )
+            else:
+                try:
+                    dijkvak.generate_fc_slootpeil()
+                except Exception as e:
+                    logging.error(
+                        f"Fout bij het bepalen van de FC bij het opzetten van de slootpeilen, '{e}'"
+                    )
+
+            # FC bij maatregel sloot dempen
+            if np.isnan(dijkvak.kwelweglengte_dempen):
+                logging.warning(
+                    "Voor dit dijkvak is er geen mogelijkheid om de sloot te dempen."
+                )
+            else:
+                try:
+                    dijkvak.generate_fc_sloot_dempen(
+                        kwelweglengte=dijkvak.kwelweglengte_dempen,
+                        deklaagdikte=dijkvak.deklaagdikte_dempen,
+                        filename=Path(OUTPUT_PATH)
+                        / f"{DIJKTRAJECT}_{dijkvak.name}.fc.sloot_dempen.png",
+                    )
+                except Exception as e:
+                    logging.error(
+                        f"Fout bij het bepalen van de FC bij het dempen van de sloot, '{e}'"
+                    )
+
+            # FC bij maatregel berm aanbrengen
+            try:
+                dijkvak.generate_fc_bermen(
+                    bermlengte_start=BERMLENGTE_START,
+                    bermlengte_eind=BERMLENGTE_EIND,
+                    stapgrootte=BERMLENGTE_STAP,
+                )
+            except Exception as e:
+                logging.error(
+                    f"Fout bij het bepalen van de FC bij het aanleggen van bermen, '{e}'"
+                )
+
+            # dijkvak.generate_result_plots(OUTPUT_PATH)
+            dijkvak.generate_total_plot()
+            dijkvak.calculate_countermeasures([2.5, 2.8, 3.0, 3.3])
+
+            self.workbook.save(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.xlsx")
+
 
 # clear the output path
 files = glob.glob(f"{OUTPUT_PATH}/*")
@@ -659,59 +744,4 @@ if not Path(HYDRA_XLSX).exists():
     sys.exit(1)
 
 dijktraject = Dijktraject.from_excel(GEGEVENS_XLSX, HYDRA_XLSX)
-
-for dijkvak in tqdm(dijktraject.dijkvakken[:1]):
-    dijkvak.log()
-
-    # standaard FC
-    try:
-        dijkvak.generate_fc()
-    except Exception as e:
-        logging.error(f"Fout bij het bepalen van de FC, '{e}'")
-
-    # FC bij maatregel slootpeil opzetten
-    if np.isnan(dijkvak.hoogte_maaiveld_polder):
-        logging.warning(
-            "Kan het slootpeil voor dit scenario niet opzetten omdat de hoogte van het maaiveld niet gedefinieerd is"
-        )
-    else:
-        try:
-            dijkvak.generate_fc_slootpeil()
-        except Exception as e:
-            logging.error(
-                f"Fout bij het bepalen van de FC bij het opzetten van de slootpeilen, '{e}'"
-            )
-
-    # FC bij maatregel sloot dempen
-    if np.isnan(dijkvak.kwelweglengte_dempen):
-        logging.warning(
-            "Voor dit dijkvak is er geen mogelijkheid om de sloot te dempen."
-        )
-    else:
-        try:
-            dijkvak.generate_fc_sloot_dempen(
-                kwelweglengte=dijkvak.kwelweglengte_dempen,
-                deklaagdikte=dijkvak.deklaagdikte_dempen,
-                filename=Path(OUTPUT_PATH)
-                / f"{DIJKTRAJECT}_{dijkvak.name}.fc.sloot_dempen.png",
-            )
-        except Exception as e:
-            logging.error(
-                f"Fout bij het bepalen van de FC bij het dempen van de sloot, '{e}'"
-            )
-
-    # FC bij maatregel berm aanbrengen
-    try:
-        dijkvak.generate_fc_bermen(
-            bermlengte_start=BERMLENGTE_START,
-            bermlengte_eind=BERMLENGTE_EIND,
-            stapgrootte=BERMLENGTE_STAP,
-        )
-    except Exception as e:
-        logging.error(
-            f"Fout bij het bepalen van de FC bij het aanleggen van bermen, '{e}'"
-        )
-
-    # dijkvak.generate_result_plots(OUTPUT_PATH)
-    dijkvak.generate_total_plot()
-    dijkvak.calculate_countermeasures([2.5, 2.8, 3.0, 3.3])
+dijktraject.generate_maatregelen()
