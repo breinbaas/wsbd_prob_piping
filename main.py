@@ -12,6 +12,8 @@ from matplotlib.ticker import StrMethodFormatter
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image
+from openpyxl.formatting.rule import CellIsRule
+from openpyxl.styles import PatternFill
 
 from prob_functions import prob_analysis
 
@@ -33,6 +35,28 @@ HYDRA_XLSX = rf"./invoergegevens/{DIJKTRAJECT}/{DIJKTRAJECT}_Hydra.xlsx"
 
 # path to output data
 OUTPUT_PATH = rf"./output"
+
+
+def column_index_to_excel_column(index):
+    """Converts a column index (1-based) to its Excel-style letter representation.
+
+    Args:
+        index: The column index to convert.
+
+    Returns:
+        The Excel-style column letter representation.
+    """
+
+    if index <= 0:
+        raise ValueError("Index must be positive")
+
+    result = ""
+    while index > 0:
+        remainder = (index - 1) % 26
+        result = chr(ord("A") + remainder) + result
+        index = (index - 1) // 26
+
+    return result
 
 
 class InputData:
@@ -84,53 +108,39 @@ class Scenario(BaseModel):
     kans: float
     parameters: InputData
 
-    def log(self, scenario_number) -> None:
-        logging.info(f"SCENARIO {scenario_number}, kans {self.kans}")
-        logging.info("---------------------------------------------")
-        logging.info(f"effectieve deklaagdikte     : {self.parameters.d_exit_eff_m}")
-        logging.info(f"s_effectieve deklaagdikte   : {self.parameters.d_exit_eff_s}")
-        logging.info(f"totale deklaagdikte         : {self.parameters.d_exit_tot_m}")
-        logging.info(f"s_totale deklaagdikte       : {self.parameters.d_exit_tot_s}")
-        logging.info(f"kwelweglengte               : {self.parameters.L_u_m}")
-        logging.info(f"cov_kwelweglengte           : {self.parameters.L_u_cov}")
-        logging.info(f"dikte watervoerend pakket   : {self.parameters.D_m}")
-        logging.info(f"s_dikte watervoerendpakket  : {self.parameters.D_s}")
-        logging.info(f"doorlatendheid aquifer      : {self.parameters.k_z_m}")
-        logging.info(f"cov_doorlatendheid          : {self.parameters.k_z_cov}")
-        logging.info(f"d70 bovenste laag           : {self.parameters.d_70_m}")
-        logging.info(f"cov_d70 bovenste laag       : {self.parameters.d_70_cov}")
-        logging.info(f"polderpeil                  : {self.parameters.h_exit_m}")
-        logging.info(f"s_polderpeil                : {self.parameters.h_exit_s}")
-        logging.info(f"verzadigd gewicht deklaag   : {self.parameters.vol_m}")
-        logging.info(f"s_verzadigd gewicht deklaag : {self.parameters.vol_s}")
-        logging.info(f"dempingsfactor              : {self.parameters.demping_m}")
-        logging.info(f"s_dempingsfactor            : {self.parameters.demping_s}")
-        logging.info(f"kritiek heave gradient      : {self.parameters.krit_heave_gr}")
-        logging.info(
-            f"overleefde_waterstand       : {self.parameters.overleefde_waterstand}"
-        )
-        logging.info(
-            f"voorland maaiveld           : {self.parameters.voorland_maaiveld}"
-        )
-        logging.info(
-            f"voorland stijghoogte        : {self.parameters.voorland_stijghoogte}"
-        )
-        logging.info(f"voorland lengte             : {self.parameters.voorland_lengte}")
-        logging.info(f"opmerkingen                 : {self.parameters.opmerkingen}")
-        logging.info(f"sloot diepte                : {self.parameters.sloot_diepte}")
-        logging.info(f"hoogte maaiveld             : {self.parameters.hoogte_maaiveld}")
-        logging.info(
-            f"intredepunt dempen          : {self.parameters.intredepunt_dempen}"
-        )
-        logging.info(
-            f"uittredepunt dempen         : {self.parameters.uittredepunt_dempen}"
-        )
-        logging.info(
-            f"kwelweglengte dempen        : {self.parameters.kwelweglengte_dempen}"
-        )
-        logging.info(
-            f"deklaagdikte dempen         : {self.parameters.deklaagdikte_dempen}"
-        )
+    def log(self, scenario_number, sheet) -> None:
+        sheet.append(["SCENARIO", scenario_number])
+        sheet.append(["kans", self.kans])
+        sheet.append(["effectieve deklaagdikte", self.parameters.d_exit_eff_m])
+        sheet.append(["s_effectieve deklaagdikte", self.parameters.d_exit_eff_s])
+        sheet.append(["totale deklaagdikte", self.parameters.d_exit_tot_m])
+        sheet.append(["s_totale deklaagdikte", self.parameters.d_exit_tot_s])
+        sheet.append(["kwelweglengte", self.parameters.L_u_m])
+        sheet.append(["cov_kwelweglengte", self.parameters.L_u_cov])
+        sheet.append(["dikte watervoerend pakket", self.parameters.D_m])
+        sheet.append(["s_dikte watervoerendpakket", self.parameters.D_s])
+        sheet.append(["doorlatendheid aquifer", self.parameters.k_z_m])
+        sheet.append(["cov_doorlatendheid", self.parameters.k_z_cov])
+        sheet.append(["d70 bovenste laag", self.parameters.d_70_m])
+        sheet.append(["cov_d70 bovenste laag", self.parameters.d_70_cov])
+        sheet.append(["polderpeil", self.parameters.h_exit_m])
+        sheet.append(["s_polderpeil", self.parameters.h_exit_s])
+        sheet.append(["verzadigd gewicht deklaag", self.parameters.vol_m])
+        sheet.append(["s_verzadigd gewicht deklaag", self.parameters.vol_s])
+        sheet.append(["dempingsfactor", self.parameters.demping_m])
+        sheet.append(["s_dempingsfactor", self.parameters.demping_s])
+        sheet.append(["kritiek heave gradient", self.parameters.krit_heave_gr])
+        sheet.append(["overleefde_waterstand", self.parameters.overleefde_waterstand])
+        sheet.append(["voorland maaiveld", self.parameters.voorland_maaiveld])
+        sheet.append(["voorland stijghoogte", self.parameters.voorland_stijghoogte])
+        sheet.append(["voorland lengte", self.parameters.voorland_lengte])
+        sheet.append(["opmerkingen", self.parameters.opmerkingen])
+        sheet.append(["sloot diepte", self.parameters.sloot_diepte])
+        sheet.append(["hoogte maaiveld", self.parameters.hoogte_maaiveld])
+        sheet.append(["intredepunt dempen", self.parameters.intredepunt_dempen])
+        sheet.append(["uittredepunt dempen", self.parameters.uittredepunt_dempen])
+        sheet.append(["kwelweglengte dempen", self.parameters.kwelweglengte_dempen])
+        sheet.append(["deklaagdikte dempen", self.parameters.deklaagdikte_dempen])
 
 
 class Waterstanden(BaseModel):
@@ -193,34 +203,23 @@ class Dijkvak(BaseModel):
         return self.scenarios[0].parameters.kwelweglengte_dempen
 
     def log(self) -> None:
-        logging.info(f"DIJKVAK: {self.name}")
+        # logging.info(f"DIJKVAK: {self.name}")
         self.log_waterstanden()
-        self.log_scenarios()
-
-        # ws = self.workbook.active
-        # ws.title = f"{self.name}"
+        self.sheet.append([""])
+        self.log_scenarios(self.sheet)
+        self.sheet.append([""])
 
     def log_waterstanden(self):
-        logging.info("-------------------------")
-        logging.info("| waterstand |   kans   |")
-        logging.info("-------------------------")
-        for i in range(self.waterstanden.hoogtes.shape[0]):
-            logging.info(
-                f"|{self.waterstanden.hoogtes[i]:11.2f} |{self.waterstanden.kansen[i]:9.5f} |"
-            )
-        logging.info("-------------------------")
-
-        # sheet = self.workbook[self.name]
         self.sheet.append(["waterstand", "kans"])
         for i in range(self.waterstanden.hoogtes.shape[0]):
             self.sheet.append(
                 [self.waterstanden.hoogtes[i], self.waterstanden.kansen[i]]
             )
 
-    def log_scenarios(self) -> None:
+    def log_scenarios(self, sheet: Worksheet) -> None:
         for i, scenario in enumerate(self.scenarios):
             logging.info("")
-            scenario.log(i + 1)
+            scenario.log(i + 1, sheet)
 
     def generate_fc(self):
         faalkans_per_scenario = []
@@ -558,7 +557,7 @@ class Dijkvak(BaseModel):
                 x = self.fc_slootopzetten.waterstanden
                 y = probs
                 p_failure = np.interp(waterstanden, x, y)
-                df[f"op_{offset:.1f}m"] = p_failure
+                df[f"+{offset:.1f}m"] = p_failure
         else:
             logging.warning(
                 "Bij dit dijkvak is het niet mogelijk om een slootpeil op te zetten."
@@ -590,6 +589,51 @@ class Dijkvak(BaseModel):
         df.set_index("waterstanden", inplace=True)
         # df.to_excel(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.xlsx")
         df.to_csv(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.csv")
+
+        self.sheet.append(["MAATREGELEN"])
+
+        self.sheet.append(["SLOOTPEIL OPZETTEN"])
+        row_maatregelen = self.sheet._current_row
+        num_opzetten = len(self.fc_slootopzetten.probabilities) + 1
+
+        self.sheet[f"{column_index_to_excel_column(num_opzetten)}{row_maatregelen}"] = (
+            "DEMPEN"
+        )
+        self.sheet[
+            f"{column_index_to_excel_column(num_opzetten+1)}{row_maatregelen}"
+        ] = "BERM"
+
+        self.sheet.append(df.columns.to_list())
+        row_results = self.sheet._current_row
+        col_excel = column_index_to_excel_column(df.shape[1])
+
+        for _, row in df.iterrows():
+            self.sheet.append(row.to_list())
+
+        red_fill = PatternFill(
+            start_color="FFEE1111", end_color="FFEE1111", fill_type="solid"
+        )
+        green_fill = PatternFill(
+            start_color="FF00EE00", end_color="FF00EE00", fill_type="solid"
+        )
+        self.sheet.conditional_formatting.add(
+            f"A{row_results+1}:{col_excel}{row_results+df.shape[0]}",
+            CellIsRule(
+                operator=">",
+                formula=[GEACCEPTEERDE_FAALKANS],
+                stopIfTrue=True,
+                fill=red_fill,
+            ),
+        )
+        self.sheet.conditional_formatting.add(
+            f"A{row_results+1}:D{row_results+df.shape[0]}",
+            CellIsRule(
+                operator="<=",
+                formula=[GEACCEPTEERDE_FAALKANS],
+                stopIfTrue=True,
+                fill=green_fill,
+            ),
+        )
 
 
 class Dijktraject(BaseModel):
@@ -661,7 +705,7 @@ class Dijktraject(BaseModel):
         return name in [dv.name for dv in self.dijkvakken]
 
     def generate_maatregelen(self):
-        for dijkvak in tqdm(dijktraject.dijkvakken[:1]):
+        for dijkvak in tqdm(dijktraject.dijkvakken):
             dijkvak.log()
 
             # standaard FC
