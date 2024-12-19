@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import glob
-from matplotlib.ticker import StrMethodFormatter
+from matplotlib.ticker import StrMethodFormatter, ScalarFormatter
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image
@@ -25,6 +25,7 @@ DIJKTRAJECT = "34a-1"
 GEACCEPTEERDE_FAALKANS = 1 / 5000
 SLOOT_OPZET_STAPGROOTTE = 0.2
 
+WATERSTANDEN_VOOR_MAATREGELEN = [2.5, 2.8, 3.0, 3.3]
 BERMLENGTE_START = 0
 BERMLENGTE_EIND = 20
 BERMLENGTE_STAP = 4
@@ -137,13 +138,16 @@ class Scenario(BaseModel):
         sheet.append(["voorland maaiveld", self.parameters.voorland_maaiveld])
         sheet.append(["voorland stijghoogte", self.parameters.voorland_stijghoogte])
         sheet.append(["voorland lengte", self.parameters.voorland_lengte])
-        sheet.append(["opmerkingen", self.parameters.opmerkingen])
         sheet.append(["sloot diepte", self.parameters.sloot_diepte])
         sheet.append(["hoogte maaiveld", self.parameters.hoogte_maaiveld])
         sheet.append(["intredepunt dempen", self.parameters.intredepunt_dempen])
         sheet.append(["uittredepunt dempen", self.parameters.uittredepunt_dempen])
         sheet.append(["kwelweglengte dempen", self.parameters.kwelweglengte_dempen])
         sheet.append(["deklaagdikte dempen", self.parameters.deklaagdikte_dempen])
+        sheet.append(["aantal simulaties", NUM_SIMULATIONS])
+
+        sheet.append([""])
+        sheet.append(["OPMERKINGEN", self.parameters.opmerkingen])
 
 
 class Waterstanden(BaseModel):
@@ -334,63 +338,71 @@ class Dijkvak(BaseModel):
             self.fc_bermen.waterstanden = r_waterstanden
             self.fc_bermen.probabilities.append((bermbreedte, p_totaal))
 
-    def generate_result_plots(self, output_path: str) -> None:
-        # FC obv waterstanden en geen maatregelen
-        if self.fc.has_results:
-            fig, ax = plt.subplots(figsize=(10, 8))
+    # def generate_result_plots(self, output_path: str) -> None:
+    #     # FC obv waterstanden en geen maatregelen
+    #     if self.fc.has_results:
+    #         fig, ax = plt.subplots(figsize=(10, 8))
 
-            if not np.isnan(self.hoogte_voorland):
-                ax.plot([self.hoogte_voorland, self.hoogte_voorland], [0, 1], "k--")
-                ax.text(self.hoogte_voorland, 0, "voorland hoogte", rotation=90)
+    #         if not np.isnan(self.hoogte_voorland):
+    #             ax.plot([self.hoogte_voorland, self.hoogte_voorland], [0, 1], "k--")
+    #             ax.text(self.hoogte_voorland, 0, "voorland hoogte", rotation=90)
 
-            if not np.isnan(self.overleefde_waterstand):
-                ax.plot(
-                    [self.overleefde_waterstand, self.overleefde_waterstand],
-                    [0, 1],
-                    "k--",
-                )
-                ax.text(
-                    self.overleefde_waterstand, 0, "overleefde waterstand", rotation=90
-                )
+    #         if not np.isnan(self.overleefde_waterstand):
+    #             ax.plot(
+    #                 [self.overleefde_waterstand, self.overleefde_waterstand],
+    #                 [0, 1],
+    #                 "k--",
+    #             )
+    #             ax.text(
+    #                 self.overleefde_waterstand, 0, "overleefde waterstand", rotation=90
+    #             )
 
-            r_waterstanden = self.fc.waterstanden
-            _, p_totaal = self.fc.probabilities[0]
+    #         r_waterstanden = self.fc.waterstanden
+    #         _, p_totaal = self.fc.probabilities[0]
 
-            if not np.isnan(self.hoogte_voorland):
-                p_totaal_voorland = p_totaal.copy()
-                p_totaal_voorland[r_waterstanden <= self.hoogte_voorland] = 0
-                ax.plot(r_waterstanden, p_totaal_voorland, "go-", label="Voorland")
+    #         if not np.isnan(self.hoogte_voorland):
+    #             p_totaal_voorland = p_totaal.copy()
+    #             p_totaal_voorland[r_waterstanden <= self.hoogte_voorland] = 0
+    #             ax.plot(r_waterstanden, p_totaal_voorland, "go-", label="Voorland")
 
-            if not np.isnan(self.hoogte_voorland):
-                p_totaal_overleefd = p_totaal.copy()
-                p_totaal_overleefd[r_waterstanden <= self.overleefde_waterstand] = 0
-                ax.plot(
-                    r_waterstanden,
-                    p_totaal_overleefd,
-                    "ro-",
-                    label="Overleefde waterstand",
-                )
+    #         if not np.isnan(self.hoogte_voorland):
+    #             p_totaal_overleefd = p_totaal.copy()
+    #             p_totaal_overleefd[r_waterstanden <= self.overleefde_waterstand] = 0
+    #             ax.plot(
+    #                 r_waterstanden,
+    #                 p_totaal_overleefd,
+    #                 "ro-",
+    #                 label="Overleefde waterstand",
+    #             )
 
-            ax.plot(r_waterstanden, p_totaal, "bo-", label="Sellmeijer")
-            ax.set_title(
-                f"Probabilistisch piping analyse - {DIJKTRAJECT} dijkvak {str(dijkvak.name).upper()}"
-            )
-            ax.grid()
-            plt.xlabel("Watertstand [m tov NAP]")
-            plt.ylabel("Kans op falen [0-1]")
-            # ax.set_yscale('log')
+    #         ax.plot(r_waterstanden, p_totaal, "bo-", label="Sellmeijer")
+    #         ax.set_title(
+    #             f"Probabilistisch piping analyse - {DIJKTRAJECT} dijkvak {str(dijkvak.name).upper()}"
+    #         )
+    #         ax.grid()
+    #         plt.xlabel("Watertstand [m tov NAP]")
+    #         plt.ylabel("Kans op falen [0-1]")
 
-            fig.savefig(Path(OUTPUT_PATH) / f"{DIJKTRAJECT}_{self.name}.fc.png")
-            plt.close()
+    #         fig.savefig(Path(OUTPUT_PATH) / f"{DIJKTRAJECT}_{self.name}.fc.png")
+    #         plt.close()
 
-        # FC bij maatregel slootpeil opzetten
+    #     # FC bij maatregel slootpeil opzetten
 
-    def plot_bermen(self, ax) -> None:
+    def plot_bermen(self, ax, used_waterlevels) -> None:
         if self.fc_bermen.has_results:
             ax.set_title(f"Berm aanleggen")
             ax.grid()
             ax.set_xlabel("Waterstand [m tov NAP]")
             r_waterstanden = self.fc_bermen.waterstanden
+            ax.plot(
+                [np.min(r_waterstanden), np.max(r_waterstanden)],
+                [1 / GEACCEPTEERDE_FAALKANS, 1 / GEACCEPTEERDE_FAALKANS],
+                "k--",
+                label="minimaal geaccepteerde faalkans",
+            )
+            # plot gecontroleerde waterstanden
+            for ws in used_waterlevels:
+                ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
             for bermbreedte, p_totaal in self.fc_bermen.probabilities:
                 ax.plot(
                     r_waterstanden,
@@ -405,6 +417,8 @@ class Dijkvak(BaseModel):
             ax.set_ylabel("Terugkeertijd [jaar]")
             ax.set_yscale("log")
             ax.set_ylim(Y_P_MIN, Y_P_MAX)
+            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+            ax.ticklabel_format(style="plain", axis="y")
             ax.legend()
         else:
             ax.annotate(
@@ -459,15 +473,26 @@ class Dijkvak(BaseModel):
         ax.set_xlabel("Watertstand [m tov NAP]")
         ax.set_ylabel("Terugkeertijd [jaar]")
         ax.set_ylim(Y_P_MIN, Y_P_MAX)
+        ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+        ax.ticklabel_format(style="plain", axis="y")
         ax.legend()
 
-    def plot_slootpeil_opzetten(self, ax) -> None:
+    def plot_slootpeil_opzetten(self, ax, used_waterlevels) -> None:
         if self.fc_slootopzetten.has_results:
             ax.set_title(f"Slootpeil opzetten")
             ax.grid()
             ax.set_xlabel("Watertstand [m tov NAP]")
-
             r_waterstanden = self.fc_slootopzetten.waterstanden
+            ax.plot(
+                [np.min(r_waterstanden), np.max(r_waterstanden)],
+                [1 / GEACCEPTEERDE_FAALKANS, 1 / GEACCEPTEERDE_FAALKANS],
+                "k--",
+                label="minimaal geaccepteerde faalkans",
+            )
+            # plot gecontroleerde waterstanden
+            for ws in used_waterlevels:
+                ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
+
             for offset, p_totaal in self.fc_slootopzetten.probabilities:
                 # 1/p kan 1/0 betekenen, dit is lelijk maar geeft toch goede plotjes omdat de nans niet worden geplot
                 ax.plot(
@@ -483,6 +508,8 @@ class Dijkvak(BaseModel):
             ax.set_ylabel("Terugkeertijd [jaar]")
             ax.set_ylim(Y_P_MIN, Y_P_MAX)
             ax.set_yscale("log")
+            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+            ax.ticklabel_format(style="plain", axis="y")
             ax.legend()
         else:
             ax.annotate(
@@ -495,29 +522,21 @@ class Dijkvak(BaseModel):
                 color="darkgrey",
             )
 
-    def plot_normal_fc(self, ax) -> None:
+    def plot_normal_fc(self, ax, used_waterlevels) -> None:
         if self.fc.has_results:
-            # self.plot_overleefd_en_of_voorland(ax)
-
             r_waterstanden = self.fc.waterstanden
+            ax.plot(
+                [np.min(r_waterstanden), np.max(r_waterstanden)],
+                [1 / GEACCEPTEERDE_FAALKANS, 1 / GEACCEPTEERDE_FAALKANS],
+                "k--",
+                label="minimaal geaccepteerde faalkans",
+            )
+            # plot gecontroleerde waterstanden
+            for ws in used_waterlevels:
+                ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
             _, p_totaal = self.fc.probabilities[0]
 
-            # if not np.isnan(self.hoogte_voorland):
-            #     p_totaal_voorland = p_totaal.copy()
-            #     p_totaal_voorland[r_waterstanden <= self.hoogte_voorland] = 0
-            #     ax.plot(r_waterstanden, p_totaal_voorland, "go-", label="Voorland")
-
-            # if not np.isnan(self.hoogte_voorland):
-            #     p_totaal_overleefd = p_totaal.copy()
-            #     p_totaal_overleefd[r_waterstanden <= self.overleefde_waterstand] = 0
-            #     ax.plot(
-            #         r_waterstanden,
-            #         p_totaal_overleefd,
-            #         "ro-",
-            #         label="Overleefde waterstand",
-            #     )
-
-            ax.plot(r_waterstanden, 1 / p_totaal, "bo-", label="Niet gedempt")
+            ax.plot(r_waterstanden, 1 / p_totaal, "o-", label="Niet gedempt")
             ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.2f}"))
             ax.set_title(f"Met en zonder slootdemping")
             ax.grid()
@@ -525,6 +544,8 @@ class Dijkvak(BaseModel):
             ax.set_ylabel("Terugkeertijd [jaar]")
             ax.set_ylim(Y_P_MIN, Y_P_MAX)
             ax.set_yscale("log")
+            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+            ax.ticklabel_format(style="plain", axis="y")
 
         # met slootpeil opzetten
         if self.fc_slootdemping.has_results:
@@ -535,15 +556,16 @@ class Dijkvak(BaseModel):
                 "o-",
                 label=f"sloot gedempt",
             )
+
         ax.legend()
 
-    def generate_total_plot(self) -> None:
+    def generate_total_plot(self, used_waterlevels) -> None:
         fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(12, 8), layout="constrained")
 
         self.plot_waterstanden(axs[0, 0])
-        self.plot_slootpeil_opzetten(axs[0, 1])
-        self.plot_normal_fc(axs[1, 0])
-        self.plot_bermen(axs[1, 1])
+        self.plot_slootpeil_opzetten(axs[0, 1], used_waterlevels)
+        self.plot_normal_fc(axs[1, 0], used_waterlevels)
+        self.plot_bermen(axs[1, 1], used_waterlevels)
 
         fig.suptitle(
             f"Probabilistisch piping analyse - {DIJKTRAJECT} dijkvak {str(self.name).upper()}"
@@ -560,6 +582,7 @@ class Dijkvak(BaseModel):
 
     def check_excel_row(self, row, waterstanden):
         """Verwacht een excel rij met omschrijving, kans bij waterstand 1, kans bij waterstand 2, .., kans bij waterstand n
+        en wijzigt de uitvoer in het geval dat de waterstand lager is dan de overleefde waterstand of het voorland.
 
         Args:
             row (_type_): omschrijving, p1, p2, ..., p;n
@@ -576,8 +599,16 @@ class Dijkvak(BaseModel):
         logging.info("Maatregelen bepalen...")
         req_prob = GEACCEPTEERDE_FAALKANS
 
-        self.sheet.append(["MAATREGELEN"])
-        self.sheet.append(["Slootpeil opzetten"])
+        self.sheet.append(
+            [
+                f"MAATREGELEN BIJ GEACCEPTEERDE FAALKANS VAN 1:{round(1/GEACCEPTEERDE_FAALKANS)} JAAR"
+            ]
+        )
+        self.sheet.append(["Slootpeil opzetten (kans uitgedrukt als terugkeertijd)"])
+
+        conclusies_slootpeil_opzetten = {ws: "geen" for ws in waterstanden}
+        conclusies_sloot_dempen = {ws: "geen" for ws in waterstanden}
+        conclusies_bermen = {ws: "geen" for ws in waterstanden}
 
         excel_waterstanden_row = [f"+{ws:.2f}" for ws in waterstanden]
         excel_waterstanden_row.insert(0, "")
@@ -588,12 +619,16 @@ class Dijkvak(BaseModel):
                 x = self.fc_slootopzetten.waterstanden
                 y = probs
                 p_failure = np.interp(waterstanden, x, y)
+                b_failure = p_failure < GEACCEPTEERDE_FAALKANS
+                for ws, b in zip(waterstanden, b_failure):
+                    if b:
+                        if conclusies_slootpeil_opzetten[ws] == "geen":
+                            conclusies_slootpeil_opzetten[ws] = offset
+
                 p_failure = 1 / p_failure
-                excel_row = [round(p, 1) for p in p_failure]
+                excel_row = [round(p) for p in p_failure if not np.isinf(p)]
                 excel_row.insert(0, f"+{offset:.2f}m")
                 self.sheet.append(self.check_excel_row(excel_row, waterstanden))
-
-                # df[f"+{offset:.1f}m"] = p_failure
         else:
             self.sheet.append(
                 ["Bij dit dijkvak is het niet mogelijk om een slootpeil op te zetten."]
@@ -601,14 +636,20 @@ class Dijkvak(BaseModel):
 
         # sloot dempen
         self.sheet.append([""])
-        self.sheet.append(["Sloot dempen"])
+        self.sheet.append(["Sloot dempen (kans uitgedrukt als terugkeertijd)"])
         if self.fc_slootdemping.has_results:
             self.sheet.append(excel_waterstanden_row)
             x = self.fc_slootdemping.waterstanden
             y = self.fc_slootdemping.probabilities[0][1]
             p_failure = np.interp(waterstanden, x, y)
+            b_failure = p_failure < GEACCEPTEERDE_FAALKANS
+            for ws, b in zip(waterstanden, b_failure):
+                if b:
+                    if conclusies_sloot_dempen[ws] == "geen":
+                        conclusies_sloot_dempen[ws] = "dempen"
+
             p_failure = 1 / p_failure
-            excel_row = [round(p, 1) for p in p_failure]
+            excel_row = [round(p) for p in p_failure if not np.isinf(p)]
             excel_row.insert(0, "gedempt")
             self.sheet.append(self.check_excel_row(excel_row, waterstanden))
         else:
@@ -618,21 +659,62 @@ class Dijkvak(BaseModel):
 
         # bermen
         self.sheet.append([""])
-        self.sheet.append(["Bermen aanbrengen"])
+        self.sheet.append(["Bermen aanbrengen (kans uitgedrukt als terugkeertijd)"])
         if self.fc_bermen.has_results:
             self.sheet.append(excel_waterstanden_row)
             for breedte, probs in self.fc_bermen.probabilities:
                 x = self.fc_bermen.waterstanden
                 y = probs
                 p_failure = np.interp(waterstanden, x, y)
+                b_failure = p_failure < GEACCEPTEERDE_FAALKANS
+                for ws, b in zip(waterstanden, b_failure):
+                    if b:
+                        if conclusies_bermen[ws] == "geen":
+                            conclusies_bermen[ws] = breedte
                 p_failure = 1 / p_failure
-                excel_row = [round(p, 1) for p in p_failure]
+                excel_row = [round(p) for p in p_failure if not np.isinf(p)]
                 excel_row.insert(0, f"{breedte:.2f}m")
                 self.sheet.append(self.check_excel_row(excel_row, waterstanden))
         else:
             self.sheet.append(
                 ["Bij dit dijkvak is het niet gelukt om bermen te berekenen."]
             )
+
+        self.sheet.append([""])
+        self.sheet.append(["CONCLUSIE"])
+        for ws in waterstanden:
+            if conclusies_slootpeil_opzetten[ws] == 0.0:
+                self.sheet.append(
+                    [f"Maatregel bij waterstand NAP+{ws:.2f}: Geen maatregel nodig"]
+                )
+            elif conclusies_slootpeil_opzetten[ws] != "geen":
+                self.sheet.append(
+                    [
+                        f"Maatregel bij waterstand NAP+{ws:.2f}: Slootpeil opzetten met {conclusies_slootpeil_opzetten[ws]:.1f}m"
+                    ]
+                )
+            elif conclusies_sloot_dempen[ws] == "dempen":
+                self.sheet.append(
+                    [f"Maatregel bij waterstand NAP+{ws:.2f}: Sloot dempen"]
+                )
+            elif conclusies_bermen[ws] == 0.0:
+                self.sheet.append(
+                    [
+                        f"Maatregel bij waterstand NAP+{ws:.2f}: Herziening nodig, slootpeil opzetten of dempen helpt niet maar een berm van 0m voldoet wel, dit is een uitzondering die verder bekeken moet worden"
+                    ]
+                )
+            elif conclusies_bermen[ws] != "geen":
+                self.sheet.append(
+                    [
+                        f"Maatregel bij waterstand NAP+{ws:.2f}: Berm aanbrengen van {round(conclusies_bermen[ws])} meter"
+                    ]
+                )
+            else:
+                self.sheet.append(
+                    [
+                        f"Maatregel bij waterstand NAP+{ws:.2f}: Geen enkele maatregel voldoet"
+                    ]
+                )
 
 
 class Dijktraject(BaseModel):
@@ -757,8 +839,8 @@ class Dijktraject(BaseModel):
                 )
 
             # dijkvak.generate_result_plots(OUTPUT_PATH)
-            dijkvak.generate_total_plot()
-            dijkvak.calculate_countermeasures([2.5, 2.8, 3.0, 3.3])
+            dijkvak.generate_total_plot(WATERSTANDEN_VOOR_MAATREGELEN)
+            dijkvak.calculate_countermeasures(WATERSTANDEN_VOOR_MAATREGELEN)
 
             self.workbook.save(Path(f"{OUTPUT_PATH}") / f"{DIJKTRAJECT}_resultaat.xlsx")
 
