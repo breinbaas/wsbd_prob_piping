@@ -1,0 +1,7 @@
+xgboost
+matplotlib
+scipy
+pandas
+openpyxl
+tqdm
+pydantic
