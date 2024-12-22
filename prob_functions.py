@@ -1,16 +1,43 @@
 import numpy as np
 from scipy.stats import lognorm, norm, linregress, gumbel_r
 import math
+import logging
+
+# Deterministen
+ETA = 0.25
+GAMMA_SUB = 16.5
+GAMMA_WATER = 10
+R_C = 0.3
+THETA = 37
+D70M = 2.08e-4
+GRAVITY = 9.81
+VISC = 1.33e-6
 
 
 def prob_analysis(
     waterstanden,
-    parameters,
-    sim,
-    h_exit_m=np.nan,
-    kwelweglengte: float = np.nan,
-    kwelweglengte_offset: float = 0.0,
-    deklaagdikte: float = np.nan,
+    num_simulations: int,  # aantal simulaties voor MC
+    d_exit_eff_m: float,  # effectieve deklaagdikte
+    d_exit_eff_s: float,  # s_effectieve deklaagdikte
+    d_exit_tot_m: float,  # totale deklaagdikte
+    d_exit_tot_s: float,  # s_totale deklaagdikte
+    L_u_m: float,  # kwelweglengte
+    L_u_cov: float,  # cov_kwelweglengte
+    D_m: float,  # dikte watervoerend pakket
+    D_s: float,  # s_dikte watervoerendpakket
+    k_z_m: float,  # doorlatendheid aquifer
+    k_z_cov: float,  # cov_doorlatendheid
+    d_70_m: float,  # d70 bovenste laag
+    d_70_cov: float,  # s d70 bovenste laag
+    h_exit_m: float,  # polderpeil
+    h_exit_s: float,  # s polderpeil
+    vol_m: float,  # verzadigd gewicht deklaag
+    vol_s: float,  # s verzadigd gewicht deklaag
+    demping_m: float,  # dempingsfactor
+    demping_s: float,  # s dempingsfactor
+    krit_heave_gr: float,  # kritiek heave gradient
+    voorland_maaiveld: float = np.nan,  # maaiveldhoogte van een voorland of np.nan als die er niet is
+    voorland_lengte: float = np.nan,  # voorland lengte dat bij de kwelweglengte opgeteld moet worden
 ):
     h_start = 1.5
     h_einde = round(waterstanden.hoogtes[-1], 2) + 1
@@ -23,11 +50,36 @@ def prob_analysis(
     p_op = []  # Faalkans opbarsten
     p_he = []  # Faalkans heave
 
-    for h in r_waterstanden:
+    if not np.isnan(voorland_maaiveld) and not np.isnan(voorland_lengte):
+        L_u_m += voorland_lengte
 
-        # if h < h voorland, l = l + l voorland else nothing
+    for h in r_waterstanden:
+        logging.info("-" * 80)
+        logging.info(f"Waterlevel: {h}")
+        logging.info("-" * 80)
+
         f_h = piping_sellmeijer(
-            parameters, round(h, 1), sim, h_exit_m, kwelweglengte, kwelweglengte_offset
+            river_level=round(h, 1),
+            num_simulations=num_simulations,
+            d_exit_eff_m=d_exit_eff_m,
+            d_exit_eff_s=d_exit_eff_s,
+            d_exit_tot_m=d_exit_tot_m,
+            d_exit_tot_s=d_exit_tot_s,
+            L_u_m=L_u_m,
+            L_u_cov=L_u_cov,
+            D_m=D_m,
+            D_s=D_s,
+            k_z_m=k_z_m,
+            k_z_cov=k_z_cov,
+            d_70_m=d_70_m,
+            d_70_cov=d_70_cov,
+            h_exit_m=h_exit_m,
+            h_exit_s=h_exit_s,
+            vol_m=vol_m,
+            vol_s=vol_s,
+            demping_m=demping_m,
+            demping_s=demping_s,
+            krit_heave_gr=krit_heave_gr,
         )  # Monte Carlo
 
         p.append(f_h[0])
@@ -66,102 +118,91 @@ def r_gumbel(mu, sigma, num):
 
 # Probabilistische analyse Sellmeijer met variabele waterstand
 def piping_sellmeijer(
-    parameters,
-    h,
-    num: int,
-    h_exit_m=np.nan,
-    kwelweglengte: float = np.nan,  # mogelijkheid om de waarde uit de parameters te overschrijven voor bv demping of berm
-    kwelweglengte_offset: float = 0.0,
-    deklaagdikte: float = np.nan,  # mogelijkheid om de waarde uit parameters voor de deklaagdikte te overschrijven
-    apply_voorland: bool = False,
+    river_level: float,  # rivier waterstand
+    num_simulations: int,  # aantal simulaties voor MC
+    d_exit_eff_m: float,  # effectieve deklaagdikte
+    d_exit_eff_s: float,  # s_effectieve deklaagdikte
+    d_exit_tot_m: float,  # totale deklaagdikte
+    d_exit_tot_s: float,  # s_totale deklaagdikte
+    L_u_m: float,  # kwelweglengte
+    L_u_cov: float,  # cov_kwelweglengte
+    D_m: float,  # dikte watervoerend pakket
+    D_s: float,  # s_dikte watervoerendpakket
+    k_z_m: float,  # doorlatendheid aquifer
+    k_z_cov: float,  # cov_doorlatendheid
+    d_70_m: float,  # d70 bovenste laag
+    d_70_cov: float,  # s d70 bovenste laag
+    h_exit_m: float,  # polderpeil
+    h_exit_s: float,  # s polderpeil
+    vol_m: float,  # verzadigd gewicht deklaag
+    vol_s: float,  # s verzadigd gewicht deklaag
+    demping_m: float,  # dempingsfactor
+    demping_s: float,  # s dempingsfactor
+    krit_heave_gr: float,  # kritiek heave gradient
 ):
-    # Standaardafwijkingen stochasten
-    d_exit_eff_s = parameters.d_exit_eff_s
-    d_exit_tot_s = parameters.d_exit_tot_s
-    L_u_s = parameters.L_u_m * parameters.L_u_cov
-    D_s = parameters.D_s
-    k_z_s = parameters.k_z_m * parameters.k_z_cov
-    d_70_s = parameters.d_70_m * parameters.d_70_cov
-    h_exit_s = parameters.h_exit_s
-    vol_s = parameters.vol_s
-    r_s = parameters.demping_s
+    logging.info(f"river_level                  : {river_level}")
+    logging.info(f"aantal simulaties            : {num_simulations}")
+    logging.info(f"effectieve laagdikte         : {d_exit_eff_m}")
+    logging.info(f"s effectieve deklaagdikte    : {d_exit_eff_s}")
+    logging.info(f"totale deklaagdikte          : {d_exit_tot_m}")
+    logging.info(f"s totale deklaagdikte        : {d_exit_tot_s}")
+    logging.info(f"kwelweglengte                : {L_u_m}")
+    logging.info(f"cov kwelweglengte            : {L_u_cov}")
+    logging.info(f"dikte watervoerend pakket    : {D_m}")
+    logging.info(f"s dikte watervoerend pakket  : {D_s}")
+    logging.info(f"polderpeil                   : {k_z_m}")
+    logging.info(f"s polderpeil                 : {k_z_cov}")
+    logging.info(f"d70 bovenste laag            : {d_70_m}")
+    logging.info(f"s d70 bovenste laag          : {d_70_cov}")
+    logging.info(f"polderpeil                   : {h_exit_m}")
+    logging.info(f"s polderpeil                 : {h_exit_s}")
+    logging.info(f"verzadigd gewicht deklaag    : {vol_m}")
+    logging.info(f"s verzadigd gewicht deklaag  : {vol_s}")
+    logging.info(f"dempingsfactor               : {demping_m}")
+    logging.info(f"s dempingsfactor             : {demping_s}")
+    logging.info(f"kritiek heave gradient       : {krit_heave_gr}")
 
-    # check of de deklaagdikte overschreven is
-    if np.isnan(deklaagdikte):
-        deklaagdikte = parameters.d_exit_eff_m
-        # TODO -> waarschuwing dat dit ook de totale deklaagdikte aanpast (in functie omschrijving)
-        totale_deklaagdikte = parameters.d_exit_tot_m
-    else:
-        totale_deklaagdikte = deklaagdikte
+    L_u_s = L_u_m * L_u_cov
+    k_z_s = k_z_m * k_z_cov
+    d_70_s = d_70_m * d_70_cov
+    r_s = demping_s
 
     # Random trekkingen stochasten
-    d_exit_eff = r_ln_s(deklaagdikte, d_exit_eff_s, num)
-    d_exit_tot = r_ln_s(totale_deklaagdikte, d_exit_tot_s, num)
-
-    # als de kwelweglengte niet overschreven is gebruiken
-    # we de standaard kwelweglengte
-    if np.isnan(kwelweglengte):
-        kwelweglengte = parameters.L_u_m
-
-    # voeg een eventuele offset toe (bv door een berm)
-    kwelweglengte += kwelweglengte_offset
-
-    if apply_voorland and (
-        not math.isnan(parameters.voorland_maaiveld)
-        and h <= parameters.voorland_maaiveld
-    ):  # als de waterhoogte lager is dan de voor landhoogte
-        # voeg de voorlandlengte aan de kwelweglengte toe
-        L_u = r_ln_s(kwelweglengte + kwelweglengte, L_u_s, num)
-    else:
-        L_u = r_ln_s(kwelweglengte, L_u_s, num)
-
-    D = r_ln_s(parameters.D_m, D_s, num)
-    k_z = r_ln_s(parameters.k_z_m, k_z_s, num)
-    d_70 = r_ln_s(parameters.d_70_m, d_70_s, num)
-
-    if not np.isnan(h_exit_m):  # override h_exit_m with given value
-        h_exit = r_norm(h_exit_m, h_exit_s, num)
-    else:
-        h_exit = r_norm(parameters.h_exit_m, h_exit_s, num)
-
-    vol = r_ln_s(parameters.vol_m - 10, vol_s, num) + 10
-    r_d = r_ln_s(parameters.demping_m, r_s, num)
-    i_ch = np.ones(num) * parameters.krit_heave_gr
+    d_exit_eff = r_ln_s(d_exit_eff_m, d_exit_eff_s, num_simulations)
+    d_exit_tot = r_ln_s(d_exit_tot_m, d_exit_tot_s, num_simulations)
+    L_u = r_ln_s(L_u_m, L_u_s, num_simulations)
+    D = r_ln_s(D_m, D_s, num_simulations)
+    k_z = r_ln_s(k_z_m, k_z_s, num_simulations)
+    d_70 = r_ln_s(d_70_m, d_70_s, num_simulations)
+    h_exit = r_norm(h_exit_m, h_exit_s, num_simulations)
+    vol = r_ln_s(vol_m - 10, vol_s, num_simulations) + 10
+    r_d = r_ln_s(demping_m, r_s, num_simulations)
+    i_ch = np.ones(num_simulations) * krit_heave_gr
 
     # Model factoren
-    m_p = np.ones(num)  # r_ln_s(1.0, 0.12, num)
-    m_u = np.ones(num)  # r_ln_s(1.0, 0.10, num)
-
-    # Deterministen
-    eta = 0.25
-    gamma_sub = 16.5
-    gamma_water = 10
-    r_c = 0.3
-    theta = 37
-    d70m = 2.08e-4
-    g = 9.81
-    visc = 1.33e-6
+    m_p = np.ones(num_simulations)  # r_ln_s(1.0, 0.12, num)
+    m_u = np.ones(num_simulations)  # r_ln_s(1.0, 0.10, num)
 
     ### Terugschrijdende Erosie (Sellmeijer)
     # Belasting
-    S_te = h - h_exit - r_c * d_exit_tot
+    S_te = river_level - h_exit - R_C * d_exit_tot
 
     # Weerstand
-    kappa = visc / g * k_z
-    F_res = eta * gamma_sub / 10 * np.tan(theta * np.pi / 180)
-    F_scale = (d70m / (kappa * L_u) ** (1 / 3)) * (d_70 / d70m) ** 0.4
+    kappa = VISC / GRAVITY * k_z
+    F_res = ETA * GAMMA_SUB / 10 * np.tan(THETA * np.pi / 180)
+    F_scale = (D70M / (kappa * L_u) ** (1 / 3)) * (d_70 / D70M) ** 0.4
     F_geometry = 0.91 * (D / L_u) ** (0.28 / ((D / L_u) ** 2.8 - 1) + 0.04)
     DeltaH_c = F_res * F_scale * F_geometry * L_u
     R_te = DeltaH_c * m_p
 
     ### Opbarsten
     # Belasting
-    phi_exit = h_exit + r_d * (h - h_exit)
+    phi_exit = h_exit + r_d * (river_level - h_exit)
     d_phi = phi_exit - h_exit
     S_op = d_phi
 
     # Weerstand
-    stijghoog_k = d_exit_eff * (vol - gamma_water) / gamma_water
+    stijghoog_k = d_exit_eff * (vol - GAMMA_WATER) / GAMMA_WATER
     R_op = stijghoog_k * m_u
 
     ### Heave

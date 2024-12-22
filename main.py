@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import glob
-from matplotlib.ticker import StrMethodFormatter, ScalarFormatter
+from matplotlib.ticker import StrMethodFormatter, ScalarFormatter, FuncFormatter
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image
@@ -17,31 +17,65 @@ from openpyxl.styles import PatternFill
 
 from prob_functions import prob_analysis
 
-
+# aantal simulaties, advies 1e4 voor debugging / testing en 1e7 voor uitvoering
 NUM_SIMULATIONS = int(1e4)
 
-# define which dijktraject to analyse
+# naam dijktraject
 DIJKTRAJECT = "34a-1"
+
+# geaccepteerde faalkans
 GEACCEPTEERDE_FAALKANS = 1 / 5000
+
+# stapgrootte voor het opzetten van het slootpeil
+# hoe kleiner de stappen hoe meer berekeningen en dit kan
+# de plot onleesbaar maken
 SLOOT_OPZET_STAPGROOTTE = 0.2
 
+# welke waterstand gebruiken we om de maatregelen te bepalen
 WATERSTANDEN_VOOR_MAATREGELEN = [2.5, 2.8, 3.0, 3.3]
+
+# hoe laten we de bermbreedte verlopen (van, tot, stapgrootte)
 BERMLENGTE_START = 0
 BERMLENGTE_EIND = 20
 BERMLENGTE_STAP = 4
 
-# path to input data
+# pad naar input data
+# PAD EN EXCEL BESTANDEN MOETEN BESTAAN
 GEGEVENS_XLSX = rf"./invoergegevens/{DIJKTRAJECT}/{DIJKTRAJECT}_LBO-1_met_check.xlsx"
 HYDRA_XLSX = rf"./invoergegevens/{DIJKTRAJECT}/{DIJKTRAJECT}_Hydra.xlsx"
 
-# path to output data
+# pad naar uitvoer data, PAD MOET BESTAAN
 OUTPUT_PATH = rf"./output"
 
+# as limiet voor de conditionele faalkans in de plots
 Y_P_MIN = 1
 Y_P_MAX = 1e5
 
+SHOW_MAATREGELEN_WATERSTANDEN = False  # toont blauwe verticale lijnen bij de gehanteerde waterstanden (voor debugging)
 
-def column_index_to_excel_column(index):
+# Optie om een minimale kans vast te stellen
+# Als dit is ingesteld worden kansen die kleiner zijn dan de opgegeven waarde op deze waarde gezet
+# Let op dat dit rare grafieken kan geven, om dat te voorkomen kan MIN_PROBABILITY = 0 gebruikt worden
+# In dat geval zijn de grafieken mooier maar kun je (ongevaarlijke) division by zero meldingen krijgen
+MIN_PROBABILITY = 0
+
+
+def custom_log_formatter(x) -> str:
+    """format de y as als 1 10 100 1.000 10.000 etc
+
+    Args:
+        x (int): kolom index
+
+
+    Returns:
+        str: getal met duizende scheiding
+    """
+    if x == 0:
+        return "0"
+    return f"{x:,.0f}".replace(",", ".")
+
+
+def column_index_to_excel_column(index) -> str:
     """Converts a column index (1-based) to its Excel-style letter representation.
 
     Args:
@@ -64,11 +98,12 @@ def column_index_to_excel_column(index):
 
 
 class InputData:
+    """een class om de invoerdata op te slaan"""
+
     def __init__(
         self,
         parameters,
     ) -> None:
-
         self.d_exit_eff_m = parameters["effectieve deklaagdikte"]
         self.d_exit_eff_s = parameters["s_effectieve deklaagdikte"]
         self.d_exit_tot_m = parameters["totale deklaagdikte"]
@@ -95,8 +130,8 @@ class InputData:
         )
         self.overleefde_waterstand = parameters["overleefde_waterstand"]
         self.voorland_maaiveld = parameters["voorland maaiveld"]
-        self.voorland_stijghoogte = parameters["voorland stijghoogte"]
-        self.voorland_lengte = parameters["voorland kwelweglengte"]
+        # self.voorland_stijghoogte = parameters["voorland stijghoogte"]
+        self.voorland_lengte = parameters["voorland lengte"]
         self.opmerkingen = parameters["opmerkingen"]
         self.sloot_diepte = parameters["sloot_diepte"]
         self.hoogte_maaiveld = parameters["hoogte_maaiveld"]
@@ -107,12 +142,20 @@ class InputData:
 
 
 class Scenario(BaseModel):
+    """Een scenario bevat de informatie voor een scenario binnen een dijkvak"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     kans: float
     parameters: InputData
 
     def log(self, scenario_number, sheet) -> None:
+        """Log de invoer data in de Excel sheet
+
+        Args:
+            scenario_number (int): Nummer voor het scenario
+            sheet (Excel Sheet): De excelsheet om naar te schrijven
+        """
         sheet.append(["SCENARIO", scenario_number])
         sheet.append(["kans", self.kans])
         sheet.append(["effectieve deklaagdikte", self.parameters.d_exit_eff_m])
@@ -136,7 +179,6 @@ class Scenario(BaseModel):
         sheet.append(["kritiek heave gradient", self.parameters.krit_heave_gr])
         sheet.append(["overleefde_waterstand", self.parameters.overleefde_waterstand])
         sheet.append(["voorland maaiveld", self.parameters.voorland_maaiveld])
-        sheet.append(["voorland stijghoogte", self.parameters.voorland_stijghoogte])
         sheet.append(["voorland lengte", self.parameters.voorland_lengte])
         sheet.append(["sloot diepte", self.parameters.sloot_diepte])
         sheet.append(["hoogte maaiveld", self.parameters.hoogte_maaiveld])
@@ -145,12 +187,17 @@ class Scenario(BaseModel):
         sheet.append(["kwelweglengte dempen", self.parameters.kwelweglengte_dempen])
         sheet.append(["deklaagdikte dempen", self.parameters.deklaagdikte_dempen])
         sheet.append(["aantal simulaties", NUM_SIMULATIONS])
+        sheet.append(
+            ["geaccepteerde faalkans", f"1:{round(1/GEACCEPTEERDE_FAALKANS)} jaar"]
+        )
 
         sheet.append([""])
         sheet.append(["OPMERKINGEN", self.parameters.opmerkingen])
 
 
 class Waterstanden(BaseModel):
+    """Informatie over de waterstanden, hoogtes en kansen"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     hoogtes: np.ndarray
@@ -158,6 +205,8 @@ class Waterstanden(BaseModel):
 
 
 class DijkvakResultaat(BaseModel):
+    """Opslagplek voor de resultaten van een dijkvak bestaande uit de waterstanden en de berekende kansen"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     waterstanden: np.ndarray = None
@@ -171,6 +220,8 @@ class DijkvakResultaat(BaseModel):
 
 
 class Dijkvak(BaseModel):
+    """Een dijkvak bevat alle informatie om de maatregelen voor dit vak te berekenen en te bepalen"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str
@@ -210,7 +261,6 @@ class Dijkvak(BaseModel):
         return self.scenarios[0].parameters.kwelweglengte_dempen
 
     def log(self) -> None:
-        # logging.info(f"DIJKVAK: {self.name}")
         self.log_waterstanden()
         self.sheet.append([""])
         self.log_scenarios(self.sheet)
@@ -229,12 +279,41 @@ class Dijkvak(BaseModel):
             scenario.log(i + 1, sheet)
 
     def generate_fc(self):
+        """Genereer de faalkans voor de situatie zonder maatregelen"""
         faalkans_per_scenario = []
 
-        for scenario in self.scenarios:  # Calculate failure probability per scenario
+        for i, scenario in enumerate(
+            self.scenarios
+        ):  # Calculate failure probability per scenario
+            logging.info(
+                f"Berekening instellingen voor de faalkans zonder maatregelen voor scenario {i+1}"
+            )
+
             # Monte Carlo
             r_waterstanden, p, _, _, _ = prob_analysis(
-                self.waterstanden, scenario.parameters, NUM_SIMULATIONS
+                waterstanden=self.waterstanden,
+                num_simulations=NUM_SIMULATIONS,
+                d_exit_eff_m=scenario.parameters.d_exit_eff_m,
+                d_exit_eff_s=scenario.parameters.d_exit_eff_s,
+                d_exit_tot_m=scenario.parameters.d_exit_tot_m,
+                d_exit_tot_s=scenario.parameters.d_exit_tot_s,
+                L_u_m=scenario.parameters.L_u_m,
+                L_u_cov=scenario.parameters.L_u_cov,
+                D_m=scenario.parameters.D_m,
+                D_s=scenario.parameters.D_s,
+                k_z_m=scenario.parameters.k_z_m,
+                k_z_cov=scenario.parameters.k_z_cov,
+                d_70_m=scenario.parameters.d_70_m,
+                d_70_cov=scenario.parameters.d_70_cov,
+                h_exit_m=scenario.parameters.h_exit_m,
+                h_exit_s=scenario.parameters.h_exit_s,
+                vol_m=scenario.parameters.vol_m,
+                vol_s=scenario.parameters.vol_s,
+                demping_m=scenario.parameters.demping_m,
+                demping_s=scenario.parameters.demping_s,
+                krit_heave_gr=scenario.parameters.krit_heave_gr,
+                voorland_maaiveld=scenario.parameters.voorland_maaiveld,
+                voorland_lengte=scenario.parameters.voorland_lengte,
             )
             faalkans_per_scenario.append((np.array(p) * scenario.kans))
 
@@ -250,8 +329,8 @@ class Dijkvak(BaseModel):
         self.fc.probabilities.append((np.nan, p_totaal))
 
     def generate_fc_slootpeil(self):
+        """Genereer de faalkans voor de situatie waarbij we het slootpeil opzetten"""
         # We gaan er vanuit dat de h_exit_m en hoogte_maaiveld niet per scenario kunnen verschillen
-        # TODO, als je h_exit_m vast instelt met op te zetten peil wat te doen met h_exit_s = 0?
         faalkans_per_slootpeil = []
 
         h_min = self.polderpeil
@@ -267,15 +346,37 @@ class Dijkvak(BaseModel):
             h_min, h_max + SLOOT_OPZET_STAPGROOTTE / 2.0, SLOOT_OPZET_STAPGROOTTE
         ):
             faalkans_per_scenario = []
-            for (
-                scenario
-            ) in self.scenarios:  # Calculate failure probability per scenario
+            for i, scenario in enumerate(
+                self.scenarios
+            ):  # Calculate failure probability per scenario
                 # Monte Carlo
+                logging.info(
+                    f"Berekening instellingen voor de faalkans met slootpeil {slootpeil} voor scenario {i+1}"
+                )
                 r_waterstanden, p, _, _, _ = prob_analysis(
-                    self.waterstanden,
-                    scenario.parameters,
-                    NUM_SIMULATIONS,
-                    h_exit_m=slootpeil,  # forceer h_exit_m op slootpeil ipv de standaard parameter waarde
+                    waterstanden=self.waterstanden,
+                    num_simulations=NUM_SIMULATIONS,
+                    d_exit_eff_m=scenario.parameters.d_exit_eff_m,
+                    d_exit_eff_s=scenario.parameters.d_exit_eff_s,
+                    d_exit_tot_m=scenario.parameters.d_exit_tot_m,
+                    d_exit_tot_s=scenario.parameters.d_exit_tot_s,
+                    L_u_m=scenario.parameters.L_u_m,
+                    L_u_cov=scenario.parameters.L_u_cov,
+                    D_m=scenario.parameters.D_m,
+                    D_s=scenario.parameters.D_s,
+                    k_z_m=scenario.parameters.k_z_m,
+                    k_z_cov=scenario.parameters.k_z_cov,
+                    d_70_m=scenario.parameters.d_70_m,
+                    d_70_cov=scenario.parameters.d_70_cov,
+                    h_exit_m=slootpeil,  # gebruik het slootpeil
+                    h_exit_s=1.0,  # de kans is 100%
+                    vol_m=scenario.parameters.vol_m,
+                    vol_s=scenario.parameters.vol_s,
+                    demping_m=scenario.parameters.demping_m,
+                    demping_s=scenario.parameters.demping_s,
+                    krit_heave_gr=scenario.parameters.krit_heave_gr,
+                    voorland_maaiveld=scenario.parameters.voorland_maaiveld,
+                    voorland_lengte=scenario.parameters.voorland_lengte,
                 )
                 faalkans_per_scenario.append((np.array(p) * scenario.kans))
 
@@ -286,19 +387,41 @@ class Dijkvak(BaseModel):
             self.fc_slootopzetten.waterstanden = r_waterstanden
             self.fc_slootopzetten.probabilities.append((slootpeil - h_min, p_totaal))
 
-    def generate_fc_sloot_dempen(
-        self, kwelweglengte: float, deklaagdikte: float, filename: str
-    ) -> None:
+    def generate_fc_sloot_dempen(self) -> None:
+        """Genereer de faalkans voor de situatie waarbij de sloot gedempt wordt"""
         faalkans_per_scenario = []
 
-        for scenario in self.scenarios:  # Calculate failure probability per scenario
+        for i, scenario in enumerate(
+            self.scenarios
+        ):  # Calculate failure probability per scenario
             # Monte Carlo
+            logging.info(
+                f"Berekening instellingen voor de faalkans met gedempte sloot voor scenario {i+1}"
+            )
             r_waterstanden, p, _, _, _ = prob_analysis(
-                self.waterstanden,
-                scenario.parameters,
-                NUM_SIMULATIONS,
-                kwelweglengte=kwelweglengte,
-                deklaagdikte=self.deklaagdikte_dempen,
+                waterstanden=self.waterstanden,
+                num_simulations=NUM_SIMULATIONS,
+                d_exit_eff_m=scenario.parameters.deklaagdikte_dempen,  # gebruik de aangepaste deklaagdikte
+                d_exit_eff_s=scenario.parameters.d_exit_eff_s,
+                d_exit_tot_m=scenario.parameters.deklaagdikte_dempen,  # gebruik de aangepaste deklaagdikte
+                d_exit_tot_s=scenario.parameters.d_exit_tot_s,
+                L_u_m=scenario.parameters.kwelweglengte_dempen,  # gebruikt de kwelweglengte bij dempen
+                L_u_cov=scenario.parameters.L_u_cov,  # cov blijft hetzelfde
+                D_m=scenario.parameters.D_m,
+                D_s=scenario.parameters.D_s,
+                k_z_m=scenario.parameters.k_z_m,
+                k_z_cov=scenario.parameters.k_z_cov,
+                d_70_m=scenario.parameters.d_70_m,
+                d_70_cov=scenario.parameters.d_70_cov,
+                h_exit_m=scenario.parameters.h_exit_m,  # ondanks dempen sloot houden we het polderpeil aan
+                h_exit_s=scenario.parameters.h_exit_s,
+                vol_m=scenario.parameters.vol_m,
+                vol_s=scenario.parameters.vol_s,
+                demping_m=scenario.parameters.demping_m,
+                demping_s=scenario.parameters.demping_s,
+                krit_heave_gr=scenario.parameters.krit_heave_gr,
+                voorland_maaiveld=scenario.parameters.voorland_maaiveld,
+                voorland_lengte=scenario.parameters.voorland_lengte,
             )
             faalkans_per_scenario.append((np.array(p) * scenario.kans))
 
@@ -308,26 +431,48 @@ class Dijkvak(BaseModel):
         self.fc_slootdemping.waterstanden = r_waterstanden
         self.fc_slootdemping.probabilities.append((0.0, p_totaal))
 
-        # TODO plotje maken (normaal en gedempt)
-
     def generate_fc_bermen(
         self, bermlengte_start: float, bermlengte_eind: float, stapgrootte: float
     ) -> None:
+        """Genereer de faalkans voor de situatie waarbij we bermen aanleggen"""
         faalkans_per_berm = []
 
         for bermbreedte in np.arange(
             bermlengte_start, bermlengte_eind + stapgrootte / 2.0, stapgrootte
         ):
             faalkans_per_scenario = []
-            for (
-                scenario
-            ) in self.scenarios:  # Calculate failure probability per scenario
+            for i, scenario in enumerate(
+                self.scenarios
+            ):  # Calculate failure probability per scenario
                 # Monte Carlo
+                logging.info(
+                    f"Berekening instellingen voor de faalkans met bermbreedte {bermbreedte} voor scenario {i+1}"
+                )
                 r_waterstanden, p, _, _, _ = prob_analysis(
-                    self.waterstanden,
-                    scenario.parameters,
-                    NUM_SIMULATIONS,
-                    kwelweglengte_offset=bermbreedte,  # forceer h_exit_m op slootpeil ipv de standaard parameter waarde
+                    waterstanden=self.waterstanden,
+                    num_simulations=NUM_SIMULATIONS,
+                    d_exit_eff_m=scenario.parameters.d_exit_eff_m,
+                    d_exit_eff_s=scenario.parameters.d_exit_eff_s,
+                    d_exit_tot_m=scenario.parameters.d_exit_tot_m,
+                    d_exit_tot_s=scenario.parameters.d_exit_tot_s,
+                    L_u_m=scenario.parameters.L_u_m
+                    + bermbreedte,  # voeg bermbreedte toe aan kwelweg lengte
+                    L_u_cov=scenario.parameters.L_u_cov,  # cov houden we gelijk
+                    D_m=scenario.parameters.D_m,
+                    D_s=scenario.parameters.D_s,
+                    k_z_m=scenario.parameters.k_z_m,
+                    k_z_cov=scenario.parameters.k_z_cov,
+                    d_70_m=scenario.parameters.d_70_m,
+                    d_70_cov=scenario.parameters.d_70_cov,
+                    h_exit_m=scenario.parameters.h_exit_m,
+                    h_exit_s=scenario.parameters.h_exit_s,
+                    vol_m=scenario.parameters.vol_m,
+                    vol_s=scenario.parameters.vol_s,
+                    demping_m=scenario.parameters.demping_m,
+                    demping_s=scenario.parameters.demping_s,
+                    krit_heave_gr=scenario.parameters.krit_heave_gr,
+                    voorland_maaiveld=scenario.parameters.voorland_maaiveld,
+                    voorland_lengte=scenario.parameters.voorland_lengte,
                 )
                 faalkans_per_scenario.append((np.array(p) * scenario.kans))
 
@@ -337,56 +482,6 @@ class Dijkvak(BaseModel):
             # bewaar de resultaten
             self.fc_bermen.waterstanden = r_waterstanden
             self.fc_bermen.probabilities.append((bermbreedte, p_totaal))
-
-    # def generate_result_plots(self, output_path: str) -> None:
-    #     # FC obv waterstanden en geen maatregelen
-    #     if self.fc.has_results:
-    #         fig, ax = plt.subplots(figsize=(10, 8))
-
-    #         if not np.isnan(self.hoogte_voorland):
-    #             ax.plot([self.hoogte_voorland, self.hoogte_voorland], [0, 1], "k--")
-    #             ax.text(self.hoogte_voorland, 0, "voorland hoogte", rotation=90)
-
-    #         if not np.isnan(self.overleefde_waterstand):
-    #             ax.plot(
-    #                 [self.overleefde_waterstand, self.overleefde_waterstand],
-    #                 [0, 1],
-    #                 "k--",
-    #             )
-    #             ax.text(
-    #                 self.overleefde_waterstand, 0, "overleefde waterstand", rotation=90
-    #             )
-
-    #         r_waterstanden = self.fc.waterstanden
-    #         _, p_totaal = self.fc.probabilities[0]
-
-    #         if not np.isnan(self.hoogte_voorland):
-    #             p_totaal_voorland = p_totaal.copy()
-    #             p_totaal_voorland[r_waterstanden <= self.hoogte_voorland] = 0
-    #             ax.plot(r_waterstanden, p_totaal_voorland, "go-", label="Voorland")
-
-    #         if not np.isnan(self.hoogte_voorland):
-    #             p_totaal_overleefd = p_totaal.copy()
-    #             p_totaal_overleefd[r_waterstanden <= self.overleefde_waterstand] = 0
-    #             ax.plot(
-    #                 r_waterstanden,
-    #                 p_totaal_overleefd,
-    #                 "ro-",
-    #                 label="Overleefde waterstand",
-    #             )
-
-    #         ax.plot(r_waterstanden, p_totaal, "bo-", label="Sellmeijer")
-    #         ax.set_title(
-    #             f"Probabilistisch piping analyse - {DIJKTRAJECT} dijkvak {str(dijkvak.name).upper()}"
-    #         )
-    #         ax.grid()
-    #         plt.xlabel("Watertstand [m tov NAP]")
-    #         plt.ylabel("Kans op falen [0-1]")
-
-    #         fig.savefig(Path(OUTPUT_PATH) / f"{DIJKTRAJECT}_{self.name}.fc.png")
-    #         plt.close()
-
-    #     # FC bij maatregel slootpeil opzetten
 
     def plot_bermen(self, ax, used_waterlevels) -> None:
         if self.fc_bermen.has_results:
@@ -400,10 +495,12 @@ class Dijkvak(BaseModel):
                 "k--",
                 label="minimaal geaccepteerde faalkans",
             )
-            # plot gecontroleerde waterstanden
-            for ws in used_waterlevels:
-                ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
+            if SHOW_MAATREGELEN_WATERSTANDEN:
+                for ws in used_waterlevels:
+                    ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
             for bermbreedte, p_totaal in self.fc_bermen.probabilities:
+                if MIN_PROBABILITY != 0.0:
+                    p_totaal[p_totaal <= MIN_PROBABILITY] = MIN_PROBABILITY
                 ax.plot(
                     r_waterstanden,
                     1 / p_totaal,
@@ -413,12 +510,10 @@ class Dijkvak(BaseModel):
 
             ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.2f}"))
             ax.set_ylabel("Kans op falen [0-1]")
-            # self.plot_overleefd_en_of_voorland(ax)
-            ax.set_ylabel("Terugkeertijd [jaar]")
+            ax.set_ylabel("Conditionele faalkans [jaar]")
             ax.set_yscale("log")
             ax.set_ylim(Y_P_MIN, Y_P_MAX)
-            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-            ax.ticklabel_format(style="plain", axis="y")
+            ax.yaxis.set_major_formatter(FuncFormatter(custom_log_formatter))
             ax.legend()
         else:
             ax.annotate(
@@ -432,8 +527,8 @@ class Dijkvak(BaseModel):
             )
 
     def plot_overleefd_en_of_voorland(self, ax):
+        ymax = ax.get_ylim()[1]
         if not np.isnan(self.hoogte_voorland):
-            ymax = ax.get_ylim()[1]
             ax.plot(
                 [self.hoogte_voorland, self.hoogte_voorland],
                 [0, ymax],
@@ -471,10 +566,9 @@ class Dijkvak(BaseModel):
         # ax.plot(x, pdf, "k--", label="Gumbel")
         self.plot_overleefd_en_of_voorland(ax)
         ax.set_xlabel("Watertstand [m tov NAP]")
-        ax.set_ylabel("Terugkeertijd [jaar]")
+        ax.set_ylabel("Conditionele faalkans [jaar]")
         ax.set_ylim(Y_P_MIN, Y_P_MAX)
-        ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-        ax.ticklabel_format(style="plain", axis="y")
+        ax.yaxis.set_major_formatter(FuncFormatter(custom_log_formatter))
         ax.legend()
 
     def plot_slootpeil_opzetten(self, ax, used_waterlevels) -> None:
@@ -489,12 +583,14 @@ class Dijkvak(BaseModel):
                 "k--",
                 label="minimaal geaccepteerde faalkans",
             )
-            # plot gecontroleerde waterstanden
-            for ws in used_waterlevels:
-                ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
+            if SHOW_MAATREGELEN_WATERSTANDEN:
+                for ws in used_waterlevels:
+                    ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
 
             for offset, p_totaal in self.fc_slootopzetten.probabilities:
                 # 1/p kan 1/0 betekenen, dit is lelijk maar geeft toch goede plotjes omdat de nans niet worden geplot
+                if MIN_PROBABILITY != 0.0:
+                    p_totaal[p_totaal <= MIN_PROBABILITY] = MIN_PROBABILITY
                 ax.plot(
                     r_waterstanden,
                     1 / p_totaal,
@@ -505,11 +601,10 @@ class Dijkvak(BaseModel):
             # self.plot_overleefd_en_of_voorland(ax)
             ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.2f}"))
             # ax.set_ylabel("Kans op falen [0-1]")
-            ax.set_ylabel("Terugkeertijd [jaar]")
+            ax.set_ylabel("Conditionele faalkans [jaar]")
             ax.set_ylim(Y_P_MIN, Y_P_MAX)
             ax.set_yscale("log")
-            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-            ax.ticklabel_format(style="plain", axis="y")
+            ax.yaxis.set_major_formatter(FuncFormatter(custom_log_formatter))
             ax.legend()
         else:
             ax.annotate(
@@ -531,28 +626,32 @@ class Dijkvak(BaseModel):
                 "k--",
                 label="minimaal geaccepteerde faalkans",
             )
-            # plot gecontroleerde waterstanden
-            for ws in used_waterlevels:
-                ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
+            if SHOW_MAATREGELEN_WATERSTANDEN:
+                for ws in used_waterlevels:
+                    ax.plot([ws, ws], [Y_P_MIN, Y_P_MAX], "b--")
             _, p_totaal = self.fc.probabilities[0]
+            if MIN_PROBABILITY != 0.0:
+                p_totaal[p_totaal <= MIN_PROBABILITY] = MIN_PROBABILITY
 
             ax.plot(r_waterstanden, 1 / p_totaal, "o-", label="Niet gedempt")
             ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.2f}"))
             ax.set_title(f"Met en zonder slootdemping")
             ax.grid()
             ax.set_xlabel("Watertstand [m tov NAP]")
-            ax.set_ylabel("Terugkeertijd [jaar]")
+            ax.set_ylabel("Conditionele faalkans [jaar]")
             ax.set_ylim(Y_P_MIN, Y_P_MAX)
             ax.set_yscale("log")
-            ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-            ax.ticklabel_format(style="plain", axis="y")
+            ax.yaxis.set_major_formatter(FuncFormatter(custom_log_formatter))
 
         # met slootpeil opzetten
         if self.fc_slootdemping.has_results:
             r_waterstanden = self.fc_slootdemping.waterstanden
+            p_totaal = self.fc_slootdemping.probabilities[0][1]
+            if MIN_PROBABILITY != 0.0:
+                p_totaal[p_totaal <= MIN_PROBABILITY] = MIN_PROBABILITY
             ax.plot(
                 r_waterstanden,
-                1 / self.fc_slootdemping.probabilities[0][1],
+                1 / p_totaal,
                 "o-",
                 label=f"sloot gedempt",
             )
@@ -599,11 +698,7 @@ class Dijkvak(BaseModel):
         logging.info("Maatregelen bepalen...")
         req_prob = GEACCEPTEERDE_FAALKANS
 
-        self.sheet.append(
-            [
-                f"MAATREGELEN BIJ GEACCEPTEERDE FAALKANS VAN 1:{round(1/GEACCEPTEERDE_FAALKANS)} JAAR"
-            ]
-        )
+        self.sheet.append([f"MAATREGELEN"])
         self.sheet.append(["Slootpeil opzetten (kans uitgedrukt als terugkeertijd)"])
 
         conclusies_slootpeil_opzetten = {ws: "geen" for ws in waterstanden}
@@ -626,7 +721,7 @@ class Dijkvak(BaseModel):
                             conclusies_slootpeil_opzetten[ws] = offset
 
                 p_failure = 1 / p_failure
-                excel_row = [round(p) for p in p_failure if not np.isinf(p)]
+                excel_row = np.round(p_failure).tolist()
                 excel_row.insert(0, f"+{offset:.2f}m")
                 self.sheet.append(self.check_excel_row(excel_row, waterstanden))
         else:
@@ -649,7 +744,7 @@ class Dijkvak(BaseModel):
                         conclusies_sloot_dempen[ws] = "dempen"
 
             p_failure = 1 / p_failure
-            excel_row = [round(p) for p in p_failure if not np.isinf(p)]
+            excel_row = np.round(p_failure).tolist()
             excel_row.insert(0, "gedempt")
             self.sheet.append(self.check_excel_row(excel_row, waterstanden))
         else:
@@ -672,7 +767,7 @@ class Dijkvak(BaseModel):
                         if conclusies_bermen[ws] == "geen":
                             conclusies_bermen[ws] = breedte
                 p_failure = 1 / p_failure
-                excel_row = [round(p) for p in p_failure if not np.isinf(p)]
+                excel_row = np.round(p_failure).tolist()
                 excel_row.insert(0, f"{breedte:.2f}m")
                 self.sheet.append(self.check_excel_row(excel_row, waterstanden))
         else:
@@ -683,7 +778,13 @@ class Dijkvak(BaseModel):
         self.sheet.append([""])
         self.sheet.append(["CONCLUSIE"])
         for ws in waterstanden:
-            if conclusies_slootpeil_opzetten[ws] == 0.0:
+            if ws < self.overleefde_waterstand:
+                self.sheet.append(
+                    [
+                        f"Maatregel bij waterstand NAP+{ws:.2f}: Dit traject heeft een waterstand van NAP+{self.overleefde_waterstand}m overleefd, geen maatregel nodig"
+                    ]
+                )
+            elif conclusies_slootpeil_opzetten[ws] == 0.0:
                 self.sheet.append(
                     [f"Maatregel bij waterstand NAP+{ws:.2f}: Geen maatregel nodig"]
                 )
@@ -740,10 +841,6 @@ class Dijktraject(BaseModel):
         df_hydra = pd.read_excel(HYDRA_XLSX)
         df_hydra.columns = df_hydra.columns.str.strip().str.lower()
 
-        # dijkvakken kunnen meerdere scenario's hebben
-        # bepaal alle kolom namen
-        col_dict = {kol.split(".")[0]: 0 for kol in df_gegevens.columns}
-
         for col in df_gegevens.columns:
             naam_dijkvak = col.split(".")[0]
 
@@ -790,6 +887,9 @@ class Dijktraject(BaseModel):
             dijkvak.log()
 
             # standaard FC
+            logging.info("-" * 80)
+            logging.info("FC zonder maatregelen")
+            logging.info("-" * 80)
             try:
                 dijkvak.generate_fc()
             except Exception as e:
@@ -802,6 +902,9 @@ class Dijktraject(BaseModel):
                 )
             else:
                 try:
+                    logging.info("-" * 80)
+                    logging.info("FC met slootpeilen")
+                    logging.info("-" * 80)
                     dijkvak.generate_fc_slootpeil()
                 except Exception as e:
                     logging.error(
@@ -815,12 +918,10 @@ class Dijktraject(BaseModel):
                 )
             else:
                 try:
-                    dijkvak.generate_fc_sloot_dempen(
-                        kwelweglengte=dijkvak.kwelweglengte_dempen,
-                        deklaagdikte=dijkvak.deklaagdikte_dempen,
-                        filename=Path(OUTPUT_PATH)
-                        / f"{DIJKTRAJECT}_{dijkvak.name}.fc.sloot_dempen.png",
-                    )
+                    logging.info("-" * 80)
+                    logging.info("FC met sloot dempen")
+                    logging.info("-" * 80)
+                    dijkvak.generate_fc_sloot_dempen()
                 except Exception as e:
                     logging.error(
                         f"Fout bij het bepalen van de FC bij het dempen van de sloot, '{e}'"
@@ -828,6 +929,9 @@ class Dijktraject(BaseModel):
 
             # FC bij maatregel berm aanbrengen
             try:
+                logging.info("-" * 80)
+                logging.info("FC met bermen")
+                logging.info("-" * 80)
                 dijkvak.generate_fc_bermen(
                     bermlengte_start=BERMLENGTE_START,
                     bermlengte_eind=BERMLENGTE_EIND,
