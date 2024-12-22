@@ -60,7 +60,7 @@ SHOW_MAATREGELEN_WATERSTANDEN = False  # toont blauwe verticale lijnen bij de ge
 MIN_PROBABILITY = 0
 
 
-def custom_log_formatter(x) -> str:
+def custom_log_formatter(x, pos) -> str:
     """format de y as als 1 10 100 1.000 10.000 etc
 
     Args:
